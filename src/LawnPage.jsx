@@ -251,7 +251,7 @@ function HomePage({ onNav }) {
               Fresh lawns.<br />Happy neighbors.
             </h2>
             <p style={{ fontSize: 17, fontStyle: "italic", color: "var(--stone)", lineHeight: 1.7, marginBottom: 26 }}>
-              Reliable, botanically-minded lawn care right on your block. Simple sign-up, flexible plans, cancel anytime.
+              Reliable, botanical-minded lawn care right on your block. Simple sign-up, flexible plans, cancel anytime.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="btn btn-dark" onClick={() => onNav("signup")}>Sign Up Today</button>
