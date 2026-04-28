@@ -1,122 +1,77 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useState, useEffect } from "react";
+import {
+  getSession, onAuthStateChange, fetchProfile, signOut
+} from "./supabase.js";
+import LawnPage from "./LawnPage.jsx";
 
-function App() {
-  const [count, setCount] = useState(0)
+export default function App() {
+  const [user, setUser]       = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const loadUserData = async (u) => {
+    try {
+      const prof = await fetchProfile(u.id);
+      setUser(u);
+      setProfile(prof);
+    } catch (e) {
+      console.warn("App loadUserData:", e.message);
+      setUser(u);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    getSession().then(u => {
+      if (u) loadUserData(u);
+      else setLoading(false);
+    });
+
+    const { data: { subscription } } = onAuthStateChange(u => {
+      if (u) loadUserData(u);
+      else { setUser(null); setProfile(null); setLoading(false); }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    await signOut();
+    setUser(null);
+    setProfile(null);
+  };
+
+  if (loading) return (
+    <div style={{
+      minHeight: "100vh", background: "#f5f0e6",
+      display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: 16
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Courier+Prime&display=swap');
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .boot-spinner {
+          width: 32px; height: 32px;
+          border: 2px solid #c8bea8;
+          border-top-color: #4a6741;
+          border-radius: 50%;
+          animation: spin 0.7s linear infinite;
+        }
+      `}</style>
+      <div className="boot-spinner" />
+      <div style={{ fontFamily: "'Courier Prime', monospace", fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: "#7a6e5e" }}>
+        Loading HoneyDew…
+      </div>
+    </div>
+  );
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+    <LawnPage
+      user={user}
+      profile={profile}
+      onSignOut={handleSignOut}
+      onProfileUpdate={setProfile}
+    />
+  );
 }
-
-export default App
