@@ -89,7 +89,7 @@ export async function fetchVisits(userId) {
 export async function fetchAllVisits() {
   const { data, error } = await supabase
     .from("lawn_visits")
-    .select("*, profiles(full_name), lawn_signups(first_name, last_name, address)")
+    .select("*, lawn_signups(first_name, last_name, address)")
     .order("visit_date", { ascending: false });
   if (error) throw error;
   return data ?? [];
@@ -145,7 +145,7 @@ export async function fetchContactMessages() {
 export async function fetchAllSignups() {
   const { data, error } = await supabase
     .from("lawn_signups")
-    .select("*, profiles(full_name, role)")
+    .select("*")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];
