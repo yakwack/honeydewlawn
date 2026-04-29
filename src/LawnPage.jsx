@@ -6,7 +6,7 @@ import {
   saveContactMessage, fetchContactMessages,
   fetchAllSignups, updateSignup,
   fetchMySchedules, fetchAllSchedules, upsertSchedule, deleteSchedule,
-} from "../supabase.js";
+} from "./supabase.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LOT_OPTIONS = [

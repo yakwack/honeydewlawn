@@ -161,3 +161,43 @@ export async function updateSignup(id, updates) {
   if (error) throw error;
   return data;
 }
+// User: fetch own upcoming schedules
+export async function fetchMySchedules(userId) {
+  const { data, error } = await supabase
+    .from('schedules')
+    .select('*')
+    .eq('user_id', userId)
+    .order('scheduled_date', { ascending: true })
+  if (error) throw error
+  return data ?? []
+}
+
+// Admin: fetch all schedules with customer info
+export async function fetchAllSchedules() {
+  const { data, error } = await supabase
+    .from('schedules')
+    .select('*, lawn_signups(first_name, last_name, address, lot, services)')
+    .order('scheduled_date', { ascending: true })
+  if (error) throw error
+  return data ?? []
+}
+
+// Admin: create or update a schedule
+export async function upsertSchedule(payload) {
+  const { data, error } = await supabase
+    .from('schedules')
+    .upsert({ ...payload, updated_at: new Date().toISOString() })
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
+// Admin: delete a schedule
+export async function deleteSchedule(id) {
+  const { error } = await supabase
+    .from('schedules')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
