@@ -5,7 +5,8 @@ import {
   fetchVisits, fetchAllVisits, upsertVisit, updateVisitStatus, deleteVisit,
   saveContactMessage, fetchContactMessages,
   fetchAllSignups, updateSignup,
-} from "./supabase.js";
+  fetchMySchedules, fetchAllSchedules, upsertSchedule, deleteSchedule,
+} from "../supabase.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LOT_OPTIONS = [
@@ -18,17 +19,29 @@ const LOT_OPTIONS = [
 const getLot = (v) => LOT_OPTIONS.find(l => l.value === v) ?? LOT_OPTIONS[0];
 
 const PAYMENT_OPTIONS = [
-  { value: "venmo",   icon: "💸", label: "Venmo",          desc: "Pay after each visit or monthly" },
-  { value: "cash",    icon: "💵", label: "Cash / Check",   desc: "Leave in mailbox or hand to crew" },
-  { value: "invoice", icon: "📬", label: "Monthly Invoice",desc: "Email invoice on the 1st — pay by the 5th" },
+  { value: "venmo",   icon: "💸", label: "Venmo",           desc: "Pay after each visit or monthly" },
+  { value: "cash",    icon: "💵", label: "Cash / Check",    desc: "Leave in mailbox or hand to crew" },
+  { value: "invoice", icon: "📬", label: "Monthly Invoice", desc: "Email invoice on the 1st — pay by the 5th" },
 ];
 
 const SERVICE_OPTIONS = [
-  { id: "lawn",    name: "Full Lawn Service", priceNote: "Pricing by lot size", desc: "Mow, edge, trim & clean" },
+  { id: "lawn",    name: "Full Lawn Service", priceNote: "Pricing by lot size",  desc: "Mow, edge, trim & clean" },
   { id: "flowers", name: "Monthly Flowers",   priceNote: "$90/mo · $25 add-on", desc: "Fresh seasonal flowers brought in & planted monthly" },
 ];
 
 const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+const STATUS_STYLE = {
+  scheduled:  { bg: "rgba(138,106,32,0.15)",  color: "var(--gold)" },
+  completed:  { bg: "rgba(74,103,65,0.15)",   color: "var(--moss)" },
+  cancelled:  { bg: "rgba(176,64,64,0.12)",   color: "var(--danger)" },
+};
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return new Date(+y, +m - 1, +d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 // ─── Global styles ────────────────────────────────────────────────────────────
 const GlobalStyle = () => (
@@ -40,8 +53,7 @@ const GlobalStyle = () => (
       --moss: #4a6741; --moss-light: #6a8f5f; --stone: #7a6e5e;
       --tan: #c8bea8; --warm-white: #faf8f2; --header-bg: #2b1b11;
       --nav-bg: #1e1209; --card-bg: #faf8f2; --page-bg: #f5f0e6;
-      --input-bg: #faf8f2; --border: #c8bea8; --danger: #b04040;
-      --gold: #8a6a20;
+      --input-bg: #faf8f2; --border: #c8bea8; --danger: #b04040; --gold: #8a6a20;
     }
     body { background: var(--page-bg); font-family: 'EB Garamond', Georgia, serif; color: var(--bark); }
     h1,h2,h3,h4 { font-family: 'Playfair Display', Georgia, serif; }
@@ -56,8 +68,8 @@ const GlobalStyle = () => (
     .btn {
       border: none; cursor: pointer; font-family: 'Courier Prime', monospace;
       font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
-      transition: all 0.18s ease; padding: 9px 20px; display: inline-flex;
-      align-items: center; gap: 6px;
+      transition: all 0.18s ease; padding: 9px 20px;
+      display: inline-flex; align-items: center; gap: 6px;
     }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-primary { background: var(--moss); color: var(--cream); }
@@ -74,13 +86,13 @@ const GlobalStyle = () => (
       font-family: 'Courier Prime', monospace; font-size: 10px;
       letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700;
     }
-    .tag-gold { background: rgba(138,106,32,0.12); color: var(--gold); border-color: rgba(138,106,32,0.3); }
-    .tag-off  { background: rgba(0,0,0,0.04); color: var(--stone); border-color: var(--border); }
+    .tag-gold   { background: rgba(138,106,32,0.12); color: var(--gold);   border-color: rgba(138,106,32,0.3); }
+    .tag-off    { background: rgba(0,0,0,0.04);       color: var(--stone);  border-color: var(--border); }
+    .tag-danger { background: rgba(176,64,64,0.12);   color: var(--danger); border-color: rgba(176,64,64,0.3); }
     input, select, textarea {
       width: 100%; background: var(--input-bg); border: 1px solid var(--border);
       padding: 9px 12px; font-size: 15px; color: var(--bark);
-      font-family: 'EB Garamond', Georgia, serif; outline: none;
-      transition: border-color 0.15s;
+      font-family: 'EB Garamond', Georgia, serif; outline: none; transition: border-color 0.15s;
     }
     input:focus, select:focus, textarea:focus { border-color: var(--moss); }
     textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
@@ -101,58 +113,80 @@ const GlobalStyle = () => (
     }
     .modal {
       background: var(--cream); border: 1px solid var(--border);
-      width: 100%; max-width: 520px; margin: auto;
-      animation: fadeIn 0.25s ease;
+      width: 100%; max-width: 520px; margin: auto; animation: fadeIn 0.25s ease;
     }
+    .status-pill {
+      font-family: 'Courier Prime', monospace; font-size: 10px;
+      letter-spacing: 0.08em; padding: 2px 8px; text-transform: uppercase;
+    }
+    .data-table th {
+      font-family: 'Courier Prime', monospace; font-size: 10px;
+      letter-spacing: 0.15em; text-transform: uppercase; color: var(--moss);
+      padding: 0 0 8px; text-align: left; border-bottom: 1px solid var(--border);
+    }
+    .data-table td {
+      font-size: 14px; padding: 10px 0;
+      border-bottom: 1px solid rgba(0,0,0,0.05); color: var(--bark);
+    }
+    .admin-table { border-collapse: collapse; }
+    .admin-table th {
+      background: var(--parchment); font-family: 'Courier Prime', monospace;
+      font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--moss); padding: 10px 14px; text-align: left;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    .admin-table td {
+      padding: 11px 14px; font-size: 14px;
+      border-bottom: 1px solid rgba(0,0,0,0.05); vertical-align: middle;
+    }
+    .admin-table tr:hover td { background: rgba(74,103,65,0.04); }
   `}</style>
 );
 
-// ─── Tiny shared components ───────────────────────────────────────────────────
-function Field({ label, children }) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      {label && <label>{label}</label>}
-      {children}
-    </div>
-  );
-}
+// ─── Shared tiny components ───────────────────────────────────────────────────
+const Field = ({ label, children }) => (
+  <div style={{ marginBottom: 16 }}>
+    {label && <label>{label}</label>}
+    {children}
+  </div>
+);
 
-function FieldRow({ children }) {
-  return <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>{children}</div>;
-}
+const FieldRow = ({ children }) => (
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>{children}</div>
+);
 
-function Card({ children, style }) {
-  return <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", padding: 24, ...style }}>{children}</div>;
-}
+const Card = ({ children, style }) => (
+  <div style={{ background: "var(--card-bg)", border: "1px solid var(--border)", padding: 24, ...style }}>{children}</div>
+);
 
-function Parchment({ children, style }) {
-  return <div style={{ background: "var(--parchment)", border: "1px solid var(--border)", padding: "16px 20px", ...style }}>{children}</div>;
-}
+const Parchment = ({ children, style }) => (
+  <div style={{ background: "var(--parchment)", border: "1px solid var(--border)", padding: "16px 20px", ...style }}>{children}</div>
+);
 
-function SectionRule({ label }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "28px 0 18px" }}>
-      <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-      <span style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", whiteSpace: "nowrap" }}>{label}</span>
-      <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
-    </div>
-  );
-}
+const SectionRule = ({ label }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "28px 0 18px" }}>
+    <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+    <span style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", whiteSpace: "nowrap" }}>{label}</span>
+    <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+  </div>
+);
 
-function StatBox({ label, value, note }) {
-  return (
-    <Parchment>
-      <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 4 }}>{label}</div>
-      <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 26, color: "var(--bark)" }}>{value}</div>
-      {note && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", marginTop: 2 }}>{note}</div>}
-    </Parchment>
-  );
-}
+const StatBox = ({ label, value, note }) => (
+  <Parchment>
+    <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 4 }}>{label}</div>
+    <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 26, color: "var(--bark)" }}>{value}</div>
+    {note && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", marginTop: 2 }}>{note}</div>}
+  </Parchment>
+);
 
-function ErrMsg({ msg }) {
-  if (!msg) return null;
-  return <p style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--danger)", margin: "8px 0" }}>{msg}</p>;
-}
+const ErrMsg = ({ msg }) => msg ? (
+  <p style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--danger)", margin: "8px 0" }}>{msg}</p>
+) : null;
+
+const StatusPill = ({ status }) => {
+  const s = STATUS_STYLE[status] ?? STATUS_STYLE.scheduled;
+  return <span className="status-pill" style={{ background: s.bg, color: s.color }}>{status}</span>;
+};
 
 function Toast({ message, type, onDone }) {
   useEffect(() => { const t = setTimeout(onDone, 3200); return () => clearTimeout(t); }, []);
@@ -168,70 +202,67 @@ function Toast({ message, type, onDone }) {
   );
 }
 
+function Modal({ title, subtitle, onClose, children }) {
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div style={{ background: "var(--header-bg)", color: "var(--cream)", padding: "18px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            {subtitle && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", opacity: 0.5, marginBottom: 2 }}>{subtitle}</div>}
+            <h3 style={{ color: "var(--cream)", fontSize: 20 }}>{title}</h3>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--cream)", fontSize: 24, cursor: "pointer", opacity: 0.7, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ padding: 24 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
 function AuthModal({ onClose }) {
-  const [email, setEmail]   = useState("");
-  const [sent, setSent]     = useState(false);
+  const [email, setEmail]     = useState("");
+  const [sent, setSent]       = useState(false);
   const [loading, setLoading] = useState(false);
-  const [err, setErr]       = useState("");
+  const [err, setErr]         = useState("");
 
   const handleSubmit = async () => {
     setErr("");
     if (!email || !email.includes("@")) { setErr("Please enter a valid email."); return; }
     setLoading(true);
-    try {
-      await signInWithEmail(email);
-      setSent(true);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setLoading(false);
-    }
+    try { await signInWithEmail(email); setSent(true); }
+    catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
-        <div style={{ background: "var(--header-bg)", color: "var(--cream)", padding: "20px 28px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div>
-            <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", opacity: 0.5, marginBottom: 2 }}>HoneyDew</div>
-            <h3 style={{ color: "var(--cream)", fontSize: 22 }}>Sign In</h3>
-          </div>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--cream)", fontSize: 24, cursor: "pointer", opacity: 0.7 }}>×</button>
+    <Modal title="Sign In" subtitle="HoneyDew" onClose={onClose}>
+      {sent ? (
+        <div style={{ textAlign: "center", padding: "16px 0" }}>
+          <div style={{ fontSize: 40, marginBottom: 14 }}>✉️</div>
+          <h3 style={{ fontSize: 22, marginBottom: 10 }}>Check your inbox</h3>
+          <p style={{ fontSize: 16, color: "var(--stone)", lineHeight: 1.65 }}>
+            We sent a magic link to <strong>{email}</strong>.<br />Click it to sign in — no password needed.
+          </p>
         </div>
-        <div style={{ padding: 28 }}>
-          {sent ? (
-            <div style={{ textAlign: "center", padding: "16px 0" }}>
-              <div style={{ fontSize: 40, marginBottom: 14 }}>✉️</div>
-              <h3 style={{ fontSize: 22, marginBottom: 10 }}>Check your inbox</h3>
-              <p style={{ fontSize: 16, color: "var(--stone)", lineHeight: 1.65 }}>
-                We sent a magic link to <strong>{email}</strong>.<br />
-                Click it to sign in — no password needed.
-              </p>
-            </div>
-          ) : (
-            <>
-              <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 20 }}>
-                Enter your email and we'll send you a magic link. Same account works for The Glasshouse.
-              </p>
-              <Field label="Email Address">
-                <input
-                  type="email" value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && handleSubmit()}
-                  placeholder="you@email.com"
-                  autoFocus
-                />
-              </Field>
-              <ErrMsg msg={err} />
-              <button className="btn btn-primary" onClick={handleSubmit} disabled={loading} style={{ width: "100%", padding: 12, marginTop: 4, justifyContent: "center" }}>
-                {loading ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Sending…</> : "Send Magic Link →"}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+      ) : (
+        <>
+          <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 20 }}>
+            Enter your email and we'll send you a magic link. Same account works for The Glasshouse.
+          </p>
+          <Field label="Email Address">
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleSubmit()}
+              placeholder="you@email.com" autoFocus />
+          </Field>
+          <ErrMsg msg={err} />
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={loading}
+            style={{ width: "100%", padding: 12, marginTop: 4, justifyContent: "center" }}>
+            {loading ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Sending…</> : "Send Magic Link →"}
+          </button>
+        </>
+      )}
+    </Modal>
   );
 }
 
@@ -239,7 +270,6 @@ function AuthModal({ onClose }) {
 function HomePage({ onNav }) {
   return (
     <div className="fade-in">
-      {/* Hero */}
       <div style={{ background: "var(--parchment)", borderBottom: "3px double var(--border)", padding: "44px 32px 40px" }}>
         <div style={{ maxWidth: 900, margin: "0 auto", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 36, alignItems: "center" }}>
           <div>
@@ -251,7 +281,7 @@ function HomePage({ onNav }) {
               Fresh lawns.<br />Happy neighbors.
             </h2>
             <p style={{ fontSize: 17, fontStyle: "italic", color: "var(--stone)", lineHeight: 1.7, marginBottom: 26 }}>
-              Reliable, botanical-minded lawn care right on your block. Simple sign-up, flexible plans, cancel anytime.
+              Reliable, botanically-minded lawn care right on your block. Simple sign-up, flexible plans, cancel anytime.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button className="btn btn-dark" onClick={() => onNav("signup")}>Sign Up Today</button>
@@ -261,7 +291,7 @@ function HomePage({ onNav }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {[
               { n: "I.",   label: "Sign Up",  desc: "Choose your services online in 2 minutes" },
-              { n: "II.",  label: "We Visit", desc: "Scheduled weekly or monthly at your convenience" },
+              { n: "II.",  label: "We Visit", desc: "Scheduled individually at your convenience" },
               { n: "III.", label: "Enjoy",    desc: "Track visits & manage services in your account" },
             ].map(s => (
               <div key={s.n} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", padding: "14px 18px", display: "flex", alignItems: "flex-start", gap: 14 }}>
@@ -279,7 +309,6 @@ function HomePage({ onNav }) {
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }}>
         <SectionRule label="Our Services" />
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, marginBottom: 36 }}>
-          {/* Lawn */}
           <Card style={{ borderLeft: "3px solid var(--moss)" }}>
             <span className="tag" style={{ marginBottom: 12, display: "inline-block" }}>Most Popular</span>
             <h3 style={{ fontSize: 20, marginBottom: 4 }}>Full Lawn Service</h3>
@@ -302,7 +331,6 @@ function HomePage({ onNav }) {
               </tbody>
             </table>
           </Card>
-          {/* Flowers */}
           <Card>
             <span className="tag tag-gold" style={{ marginBottom: 12, display: "inline-block" }}>Add-On</span>
             <h3 style={{ fontSize: 20, marginBottom: 4 }}>Monthly Flowers</h3>
@@ -311,7 +339,7 @@ function HomePage({ onNav }) {
               We source and bring in fresh seasonal flowers each month — planted, arranged, and refreshed in your beds so there's always something in bloom.
             </p>
             <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 5 }}>
-              {["Hand-selected seasonal varieties", "Delivered & planted by us each month", "Bed prep, soil & mulch touch-up", "Removed & replaced as seasons turn"].map(f => (
+              {["Hand-selected seasonal varieties","Delivered & planted by us each month","Bed prep, soil & mulch touch-up","Removed & replaced as seasons turn"].map(f => (
                 <li key={f} style={{ fontSize: 13, color: "var(--stone)", display: "flex", alignItems: "flex-start", gap: 8, lineHeight: 1.5 }}>
                   <span style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--moss)", flexShrink: 0, marginTop: 6, display: "inline-block" }} />{f}
                 </li>
@@ -319,12 +347,10 @@ function HomePage({ onNav }) {
             </ul>
           </Card>
         </div>
-
-        {/* CTA */}
         <div style={{ background: "var(--bark)", color: "var(--cream)", padding: "28px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 16, borderTop: "3px double rgba(245,240,230,0.25)" }}>
           <div>
             <h3 style={{ color: "var(--cream)", fontSize: 22, marginBottom: 4 }}>Ready to sign up?</h3>
-            <p style={{ fontFamily: "'EB Garamond',serif", fontSize: 15, opacity: 0.7, fontStyle: "italic" }}>Takes 2 minutes. Your neighbors already have.</p>
+            <p style={{ fontSize: 15, opacity: 0.7, fontStyle: "italic" }}>Takes 2 minutes. Your neighbors already have.</p>
           </div>
           <button className="btn" style={{ background: "var(--cream)", color: "var(--bark)", padding: "12px 24px" }} onClick={() => onNav("signup")}>Get Started →</button>
         </div>
@@ -335,14 +361,13 @@ function HomePage({ onNav }) {
 
 // ─── Page: Sign Up ────────────────────────────────────────────────────────────
 function SignupPage({ user, onNav, onSignupComplete, showToast }) {
-  const [form, setForm]       = useState({ first_name: "", last_name: "", address: "", lot: "small", billing: "monthly", preferred_day: "", notes: "", payment_method: "venmo" });
+  const [form, setForm]         = useState({ first_name: "", last_name: "", address: "", lot: "small", billing: "monthly", preferred_day: "", notes: "", payment_method: "venmo" });
   const [services, setServices] = useState({ lawn: true, flowers: false });
-  const [saving, setSaving]   = useState(false);
-  const [err, setErr]         = useState("");
-  const [success, setSuccess] = useState(false);
+  const [saving, setSaving]     = useState(false);
+  const [err, setErr]           = useState("");
+  const [success, setSuccess]   = useState(false);
   const [showAuth, setShowAuth] = useState(false);
 
-  // Pre-fill if already signed up
   useEffect(() => {
     if (!user) return;
     fetchLawnSignup(user.id).then(s => {
@@ -369,11 +394,8 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
       setSuccess(true);
       onSignupComplete?.();
       showToast("You're signed up for HoneyDew! 🌿");
-    } catch (e) {
-      setErr("Save failed: " + e.message);
-    } finally {
-      setSaving(false);
-    }
+    } catch (e) { setErr("Save failed: " + e.message); }
+    finally { setSaving(false); }
   };
 
   if (success) return (
@@ -381,9 +403,7 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
       <Card style={{ textAlign: "center", padding: 40 }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🌿</div>
         <h2 style={{ fontSize: 28, marginBottom: 10 }}>Welcome to HoneyDew.</h2>
-        <p style={{ fontSize: 17, color: "var(--stone)", lineHeight: 1.7, maxWidth: 380, margin: "0 auto 24px" }}>
-          You're all set. We'll be in touch to confirm your first visit.
-        </p>
+        <p style={{ fontSize: 17, color: "var(--stone)", lineHeight: 1.7, maxWidth: 380, margin: "0 auto 24px" }}>You're all set. We'll be in touch to confirm your first visit.</p>
         <button className="btn btn-primary" onClick={() => onNav("account")} style={{ padding: "12px 28px" }}>Go to My Account →</button>
       </Card>
     </div>
@@ -394,9 +414,7 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew Lawn Services</div>
         <h2 style={{ fontSize: 32, marginBottom: 8 }}>{user ? "Update Your Signup" : "Join the Collection"}</h2>
-        <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65 }}>
-          One account for HoneyDew Lawn Services and The Glasshouse. Sign up once — access both.
-        </p>
+        <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65 }}>One account for HoneyDew Lawn Services and The Glasshouse. Sign up once — access both.</p>
       </div>
       <Card>
         <FieldRow>
@@ -404,7 +422,6 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
           <Field label="Last Name"><input value={form.last_name} onChange={e => set("last_name", e.target.value)} placeholder="Doe" /></Field>
         </FieldRow>
         <Field label="Your Address"><input value={form.address} onChange={e => set("address", e.target.value)} placeholder="123 Your Street" /></Field>
-
         <Field label="Approximate Lot Size">
           <select value={form.lot} onChange={e => set("lot", e.target.value)}>
             {LOT_OPTIONS.map(l => (
@@ -414,7 +431,6 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
             ))}
           </select>
         </Field>
-
         <Field label="Choose Your Services">
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 6 }}>
             {SERVICE_OPTIONS.map(s => (
@@ -428,7 +444,6 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
             ))}
           </div>
         </Field>
-
         <FieldRow>
           <Field label="Preferred Billing">
             <select value={form.billing} onChange={e => set("billing", e.target.value)}>
@@ -443,11 +458,9 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
             </select>
           </Field>
         </FieldRow>
-
         <Field label="Notes for Us (optional)">
           <textarea value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Gate code, dog in yard, areas to avoid…" style={{ minHeight: 70 }} />
         </Field>
-
         <SectionRule label="Payment Setup" />
         {PAYMENT_OPTIONS.map(po => (
           <div key={po.value} onClick={() => set("payment_method", po.value)}
@@ -462,9 +475,9 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
             </div>
           </div>
         ))}
-
         <ErrMsg msg={err} />
-        <button className="btn btn-primary" onClick={handleSubmit} disabled={saving} style={{ width: "100%", marginTop: 14, padding: 13, justifyContent: "center" }}>
+        <button className="btn btn-primary" onClick={handleSubmit} disabled={saving}
+          style={{ width: "100%", marginTop: 14, padding: 13, justifyContent: "center" }}>
           {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : `${user ? "Update" : "Complete"} Sign Up →`}
         </button>
         {!user && <p style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", textAlign: "center", marginTop: 10, letterSpacing: "0.05em" }}>You'll be prompted to sign in when you submit.</p>}
@@ -476,15 +489,16 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
 
 // ─── Page: Account ────────────────────────────────────────────────────────────
 function AccountPage({ user, onNav, showToast }) {
-  const [signup, setSignup]   = useState(null);
-  const [visits, setVisits]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showAuth, setShowAuth] = useState(false);
+  const [signup, setSignup]       = useState(null);
+  const [visits, setVisits]       = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [showAuth, setShowAuth]   = useState(false);
 
   useEffect(() => {
     if (!user) { setLoading(false); return; }
-    Promise.all([fetchLawnSignup(user.id), fetchVisits(user.id)])
-      .then(([s, v]) => { setSignup(s); setVisits(v); })
+    Promise.all([fetchLawnSignup(user.id), fetchVisits(user.id), fetchMySchedules(user.id)])
+      .then(([s, v, sch]) => { setSignup(s); setVisits(v); setSchedules(sch); })
       .catch(e => console.warn("Account load:", e.message))
       .finally(() => setLoading(false));
   }, [user?.id]);
@@ -507,7 +521,7 @@ function AccountPage({ user, onNav, showToast }) {
       <div style={{ fontSize: 48, marginBottom: 16 }}>🌿</div>
       <h2 style={{ fontSize: 28, marginBottom: 10 }}>Your HoneyDew Account</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", maxWidth: 360, margin: "0 auto 24px", lineHeight: 1.7 }}>
-        Sign in to manage your lawn services, track visits, and update your plan.
+        Sign in to manage your lawn services, track visits, and view your schedule.
       </p>
       <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
         <button className="btn btn-primary" onClick={() => onNav("signup")} style={{ padding: "12px 24px" }}>Create Account</button>
@@ -526,18 +540,21 @@ function AccountPage({ user, onNav, showToast }) {
     </div>
   );
 
-  const lot = getLot(signup.lot);
+  const lot     = getLot(signup.lot);
   const hasBoth = signup.services?.includes("lawn") && signup.services?.includes("flowers");
-  const cpv = signup.billing === "monthly"
+  const cpv     = signup.billing === "monthly"
     ? `$${(lot.priceMonth ?? 0) + (hasBoth ? 90 : 0)}/mo`
     : `$${(lot.priceVisit ?? "?") + (hasBoth ? 25 : 0)}/visit`;
-  const monthTotal = visits.filter(v => {
-    const d = new Date(v.visit_date);
-    const now = new Date();
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  }).reduce((a, v) => a + (v.cost ?? 0), 0);
-  const payIcon = PAYMENT_OPTIONS.find(p => p.value === signup.payment_method)?.icon ?? "—";
-  const payLabel = PAYMENT_OPTIONS.find(p => p.value === signup.payment_method)?.label ?? "—";
+
+  const monthTotal = visits
+    .filter(v => { const d = new Date(v.visit_date); const n = new Date(); return d.getMonth() === n.getMonth() && d.getFullYear() === n.getFullYear(); })
+    .reduce((a, v) => a + (v.cost ?? 0), 0);
+
+  const today    = new Date().toISOString().slice(0, 10);
+  const upcoming = schedules
+    .filter(s => s.status === "scheduled" && s.scheduled_date >= today)
+    .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date));
+  const nextVisit = upcoming[0];
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
@@ -554,10 +571,32 @@ function AccountPage({ user, onNav, showToast }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 28 }}>
-        <StatBox label="Monthly Cost" value={lot.priceVisit ? cpv : "Custom"} note={signup.billing === "monthly" ? "monthly plan" : "per visit"} />
-        <StatBox label="This Month" value={`$${monthTotal.toFixed(0)}`} note={`${visits.length} total visit${visits.length !== 1 ? "s" : ""}`} />
-        <StatBox label="Lot Size" value={lot.label} note={`${signup.services?.length ?? 0} active service${signup.services?.length !== 1 ? "s" : ""}`} />
+        <StatBox label="Monthly Cost"  value={lot.priceVisit ? cpv : "Custom"} note={signup.billing === "monthly" ? "monthly plan" : "per visit"} />
+        <StatBox label="This Month"    value={`$${monthTotal.toFixed(0)}`} note={`${visits.length} total visit${visits.length !== 1 ? "s" : ""}`} />
+        <StatBox label="Next Visit"    value={nextVisit ? fmtDate(nextVisit.scheduled_date) : "TBD"} note={nextVisit ? nextVisit.service_type : "We'll be in touch"} />
       </div>
+
+      {/* Upcoming schedule */}
+      {upcoming.length > 0 && (
+        <>
+          <SectionRule label="Upcoming Schedule" />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 8 }}>
+            {upcoming.map(s => (
+              <div key={s.id} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: "3px solid var(--moss)", padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: "var(--bark)", marginBottom: 2 }}>{fmtDate(s.scheduled_date)}</div>
+                  <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.service_type}</div>
+                  {s.notes && <div style={{ fontSize: 13, color: "var(--stone)", marginTop: 4, fontStyle: "italic" }}>{s.notes}</div>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  {s.cost && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 13, color: "var(--moss)" }}>${parseFloat(s.cost).toFixed(2)}</div>}
+                  <StatusPill status={s.status} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <SectionRule label="My Services" />
       <div style={{ marginBottom: 24 }}>
@@ -585,23 +624,15 @@ function AccountPage({ user, onNav, showToast }) {
       {visits.length === 0 ? (
         <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", padding: "16px 0" }}>No visits yet — your first is coming soon.</p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>
-            {["Date","Service","Status","Amount"].map(h => (
-              <th key={h} style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--moss)", padding: "0 0 8px", textAlign: "left", borderBottom: "1px solid var(--border)" }}>{h}</th>
-            ))}
-          </tr></thead>
+        <table className="data-table" style={{ width: "100%" }}>
+          <thead><tr>{["Date","Service","Status","Amount"].map(h => <th key={h}>{h}</th>)}</tr></thead>
           <tbody>
             {visits.map(v => (
               <tr key={v.id}>
-                <td style={{ padding: "10px 0", fontSize: 14, borderBottom: "1px solid rgba(0,0,0,0.05)" }}>{v.visit_date}</td>
-                <td style={{ padding: "10px 0", fontSize: 14, borderBottom: "1px solid rgba(0,0,0,0.05)", textTransform: "capitalize" }}>{v.service_type}</td>
-                <td style={{ padding: "10px 0", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                  <span style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.08em", padding: "2px 8px", textTransform: "uppercase", background: v.status === "completed" ? "rgba(74,103,65,0.15)" : "rgba(138,106,32,0.15)", color: v.status === "completed" ? "var(--moss)" : "var(--gold)" }}>
-                    {v.status === "completed" ? "Completed" : "Scheduled"}
-                  </span>
-                </td>
-                <td style={{ padding: "10px 0", fontSize: 14, borderBottom: "1px solid rgba(0,0,0,0.05)" }}>${(v.cost ?? 0).toFixed(2)}</td>
+                <td>{fmtDate(v.visit_date)}</td>
+                <td style={{ textTransform: "capitalize" }}>{v.service_type}</td>
+                <td><StatusPill status={v.status} /></td>
+                <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 13 }}>${(v.cost ?? 0).toFixed(2)}</td>
               </tr>
             ))}
           </tbody>
@@ -610,106 +641,133 @@ function AccountPage({ user, onNav, showToast }) {
 
       <SectionRule label="Payment Method" />
       <Parchment style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-        <div style={{ fontSize: 15 }}>{payIcon} {payLabel}</div>
+        <div style={{ fontSize: 15 }}>
+          {PAYMENT_OPTIONS.find(p => p.value === signup.payment_method)?.icon}{" "}
+          {PAYMENT_OPTIONS.find(p => p.value === signup.payment_method)?.label ?? "—"}
+        </div>
         <button className="btn btn-ghost" style={{ fontSize: 10 }} onClick={() => onNav("signup")}>Change</button>
       </Parchment>
     </div>
   );
 }
 
-// ─── Page: Schedule ───────────────────────────────────────────────────────────
+// ─── Page: Schedule (customer view) ──────────────────────────────────────────
 function SchedulePage({ user, showToast }) {
-  const [rescheduleDate, setRescheduleDate] = useState("");
-  const [submitted, setSubmitted] = useState(false);
-  const [signup, setSignup] = useState(null);
+  const [schedules, setSchedules]   = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [rescheduleDate, setRDate]  = useState("");
+  const [rescheduleNote, setRNote]  = useState("");
+  const [submitted, setSubmitted]   = useState(false);
+  const [showAuth, setShowAuth]     = useState(false);
 
   useEffect(() => {
-    if (!user) return;
-    fetchLawnSignup(user.id).then(setSignup).catch(() => {});
+    if (!user) { setLoading(false); return; }
+    fetchMySchedules(user.id)
+      .then(setSchedules)
+      .catch(e => console.warn("Schedule load:", e.message))
+      .finally(() => setLoading(false));
   }, [user?.id]);
 
-  const visitDays = [2, 5, 9, 12, 16, 19, 23, 26];
-  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const startDow = 3; // May 1 2025 = Thursday
+  const today    = new Date().toISOString().slice(0, 10);
+  const upcoming = schedules.filter(s => s.scheduled_date >= today && s.status !== "cancelled").sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date));
+  const past     = schedules.filter(s => s.scheduled_date < today || s.status === "completed").sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date));
 
-  const cells = [];
-  for (let i = 0; i < startDow; i++) cells.push(null);
-  for (let d = 1; d <= 31; d++) cells.push(d);
+  if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: 60 }}><span className="spinner" style={{ width: 28, height: 28 }} /></div>;
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
       <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew</div>
-      <h2 style={{ fontSize: 30, marginBottom: 8 }}>Service Schedule</h2>
+      <h2 style={{ fontSize: 30, marginBottom: 8 }}>Your Schedule</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 28 }}>
-        View upcoming visits. Signed-in customers see their personal schedule below.
+        Your upcoming and past lawn care visits. Need to move something? Use the form below.
       </p>
 
-      <SectionRule label="May 2025" />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6, marginBottom: 28 }}>
-        {cells.map((d, i) => {
-          if (!d) return <div key={i} style={{ background: "var(--parchment)", border: "1px solid var(--border)", minHeight: 70, opacity: 0.3 }} />;
-          const dow = (startDow + d - 1) % 7;
-          const hasVisit = visitDays.includes(d);
-          return (
-            <div key={i} onClick={() => showToast(hasVisit ? `Visit scheduled May ${d}` : `No visit on May ${d}`)}
-              style={{ background: hasVisit ? "rgba(74,103,65,0.08)" : "var(--parchment)", border: `1px solid ${hasVisit ? "var(--moss)" : "var(--border)"}`, padding: "10px 6px", textAlign: "center", cursor: "pointer", minHeight: 70, transition: "all 0.2s" }}>
-              <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 9, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--stone)", marginBottom: 4 }}>{dayNames[dow]}</div>
-              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: "var(--bark)" }}>{d}</div>
-              {hasVisit && <div style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--moss)", margin: "4px auto 0" }} />}
+      {!user ? (
+        <Parchment style={{ textAlign: "center", padding: 32 }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🗓</div>
+          <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", marginBottom: 16 }}>Sign in to see your personal schedule.</p>
+          <button className="btn btn-primary" onClick={() => setShowAuth(true)} style={{ padding: "10px 24px" }}>Sign In</button>
+          {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+        </Parchment>
+      ) : (
+        <>
+          <SectionRule label={`Upcoming (${upcoming.length})`} />
+          {upcoming.length === 0 ? (
+            <Parchment style={{ textAlign: "center", padding: 24 }}>
+              <p style={{ fontSize: 15, color: "var(--stone)", fontStyle: "italic" }}>No upcoming visits scheduled yet — we'll be in touch soon.</p>
+            </Parchment>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {upcoming.map(s => (
+                <div key={s.id} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", borderLeft: "3px solid var(--moss)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: "var(--bark)", marginBottom: 3 }}>{fmtDate(s.scheduled_date)}</div>
+                    <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{s.service_type}</div>
+                    {s.notes && <div style={{ fontSize: 13, color: "var(--stone)", marginTop: 4, fontStyle: "italic" }}>{s.notes}</div>}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {s.cost && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 13, color: "var(--moss)" }}>${parseFloat(s.cost).toFixed(2)}</div>}
+                    <StatusPill status={s.status} />
+                  </div>
+                </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
+          )}
 
-      <SectionRule label="Upcoming Visits" />
-      {[
-        { date: "May 2, 2025",  day: "Friday",  note: user && signup ? `You (${signup.address})` : "Service day" },
-        { date: "May 9, 2025",  day: "Friday",  note: "Service day" },
-        { date: "May 16, 2025", day: "Friday",  note: "Service day" },
-        { date: "May 23, 2025", day: "Friday",  note: "Service day" },
-      ].map(u => (
-        <div key={u.date} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", padding: "14px 18px", marginBottom: 10 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 4 }}>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: "var(--bark)" }}>{u.date}</div>
-            <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{u.day}</div>
-          </div>
-          <div style={{ fontSize: 14, color: "var(--stone)" }}>{u.note}</div>
-        </div>
-      ))}
+          {past.length > 0 && (
+            <>
+              <SectionRule label={`Past Visits (${past.length})`} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {past.slice(0, 8).map(s => (
+                  <div key={s.id} style={{ background: "var(--card-bg)", border: "1px solid var(--border)", padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, opacity: 0.8 }}>
+                    <div>
+                      <div style={{ fontSize: 15, color: "var(--bark)" }}>{fmtDate(s.scheduled_date)}</div>
+                      <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{s.service_type}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {s.cost && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 12, color: "var(--stone)" }}>${parseFloat(s.cost).toFixed(2)}</div>}
+                      <StatusPill status={s.status} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
 
-      <SectionRule label="Request a Reschedule" />
-      <Card style={{ maxWidth: 500 }}>
-        {submitted ? (
-          <div style={{ textAlign: "center", padding: "10px 0" }}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
-            <p style={{ fontSize: 16, color: "var(--stone)" }}>Reschedule request submitted. We'll confirm shortly.</p>
-          </div>
-        ) : (
-          <>
-            <Field label="Preferred New Date">
-              <input type="date" value={rescheduleDate} onChange={e => setRescheduleDate(e.target.value)} />
-            </Field>
-            <Field label="Reason (optional)">
-              <textarea placeholder="Travel, event, etc." style={{ minHeight: 60 }} />
-            </Field>
-            <button className="btn btn-primary" onClick={() => {
-              if (!rescheduleDate) { showToast("Please select a date", "error"); return; }
-              setSubmitted(true);
-              showToast("Reschedule request submitted");
-            }}>Submit Request</button>
-          </>
-        )}
-      </Card>
+          <SectionRule label="Request a Change" />
+          <Card style={{ maxWidth: 500 }}>
+            {submitted ? (
+              <div style={{ textAlign: "center", padding: "10px 0" }}>
+                <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
+                <p style={{ fontSize: 16, color: "var(--stone)" }}>Request received. We'll confirm your new date shortly.</p>
+              </div>
+            ) : (
+              <>
+                <Field label="Preferred New Date">
+                  <input type="date" value={rescheduleDate} min={today} onChange={e => setRDate(e.target.value)} />
+                </Field>
+                <Field label="Reason (optional)">
+                  <textarea value={rescheduleNote} onChange={e => setRNote(e.target.value)} placeholder="Travel, event, etc." style={{ minHeight: 60 }} />
+                </Field>
+                <button className="btn btn-primary" onClick={() => {
+                  if (!rescheduleDate) { showToast("Please select a date", "error"); return; }
+                  setSubmitted(true); showToast("Reschedule request submitted");
+                }}>Submit Request</button>
+              </>
+            )}
+          </Card>
+        </>
+      )}
     </div>
   );
 }
 
 // ─── Page: Contact ────────────────────────────────────────────────────────────
 function ContactPage({ user, showToast }) {
-  const [form, setForm] = useState({ name: "", email: user?.email ?? "", address: "", topic: "", message: "" });
+  const [form, setForm]     = useState({ name: "", email: user?.email ?? "", address: "", topic: "", message: "" });
   const [saving, setSaving] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [err, setErr] = useState("");
+  const [sent, setSent]     = useState(false);
+  const [err, setErr]       = useState("");
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -721,23 +779,16 @@ function ContactPage({ user, showToast }) {
     setSaving(true);
     try {
       await saveContactMessage({ name: form.name, email: form.email, address: form.address, topic: form.topic || "General", message: form.message });
-      setSent(true);
-      showToast("Message sent!");
-    } catch (e) {
-      setErr("Send failed: " + e.message);
-    } finally {
-      setSaving(false);
-    }
+      setSent(true); showToast("Message sent!");
+    } catch (e) { setErr("Send failed: " + e.message); }
+    finally { setSaving(false); }
   };
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
       <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew</div>
       <h2 style={{ fontSize: 30, marginBottom: 8 }}>Get in Touch</h2>
-      <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 28 }}>
-        Questions about services, pricing, or your yard? We're right in the neighborhood.
-      </p>
-
+      <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 28 }}>Questions about services, pricing, or your yard? We're right in the neighborhood.</p>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, alignItems: "start" }}>
         <div>
           {sent ? (
@@ -770,16 +821,6 @@ function ContactPage({ user, showToast }) {
             <label style={{ marginBottom: 10, display: "block" }}>Service Hours</label>
             <p style={{ fontSize: 14, color: "var(--stone)", lineHeight: 1.8 }}>Mon – Fri: 8am – 6pm<br />Saturday: 9am – 3pm<br />Sunday: Rest day 🌿</p>
           </Parchment>
-          <Parchment>
-            <label style={{ marginBottom: 10, display: "block" }}>Quick Links</label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {[["→ Sign up for service","signup"],["→ View schedule","schedule"]].map(([l, p]) => (
-                <button key={p} className="btn btn-ghost" style={{ textAlign: "left", padding: "8px 14px", width: "100%" }} onClick={() => {}}>
-                  {l}
-                </button>
-              ))}
-            </div>
-          </Parchment>
         </div>
       </div>
     </div>
@@ -788,88 +829,129 @@ function ContactPage({ user, showToast }) {
 
 // ─── Page: Admin ──────────────────────────────────────────────────────────────
 function AdminPage({ user, showToast }) {
-  const [signups, setSignups]     = useState([]);
-  const [visits, setVisits]       = useState([]);
-  const [messages, setMessages]   = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [activeTab, setActiveTab] = useState("customers");
-  const [showVisitModal, setShowVisitModal] = useState(null); // signup row
-  const [visitForm, setVisitForm] = useState({ visit_date: "", service_type: "lawn", status: "scheduled", cost: "", notes: "" });
-  const [saving, setSaving]       = useState(false);
-  const [editSignup, setEditSignup] = useState(null);
+  const [signups, setSignups]           = useState([]);
+  const [allSchedules, setAllSchedules] = useState([]);
+  const [visits, setVisits]             = useState([]);
+  const [messages, setMessages]         = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [activeTab, setActiveTab]       = useState("customers");
+  const [scheduleModal, setScheduleModal] = useState(null);
+  const [visitModal, setVisitModal]       = useState(null);
+  const [editSignup, setEditSignup]       = useState(null);
+  const [saving, setSaving]               = useState(false);
+
+  const blankSched = { scheduled_date: "", service_type: "lawn", status: "scheduled", cost: "", notes: "" };
+  const blankVisit = { visit_date: "", service_type: "lawn", status: "completed", cost: "", notes: "" };
+  const [schedForm, setSchedForm] = useState(blankSched);
+  const [visitForm, setVisitForm] = useState(blankVisit);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, v, m] = await Promise.all([fetchAllSignups(), fetchAllVisits(), fetchContactMessages()]);
-      setSignups(s);
-      setVisits(v);
-      setMessages(m);
-    } catch (e) {
-      showToast("Load failed: " + e.message, "error");
-    } finally {
-      setLoading(false);
-    }
+      const [s, sch, v, m] = await Promise.all([fetchAllSignups(), fetchAllSchedules(), fetchAllVisits(), fetchContactMessages()]);
+      setSignups(s); setAllSchedules(sch); setVisits(v); setMessages(m);
+    } catch (e) { showToast("Load failed: " + e.message, "error"); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const handleMarkVisit = async (visitId, status) => {
+  // ── Schedule handlers ──────────────────────────────────────────────────────
+  const openAddSchedule = (signup) => {
+    setSchedForm({ ...blankSched, service_type: signup.services?.includes("lawn") ? "lawn" : "flowers", cost: getLot(signup.lot).priceVisit ?? "" });
+    setScheduleModal({ signup, editing: null });
+  };
+
+  const openEditSchedule = (sched, signup) => {
+    setSchedForm({ scheduled_date: sched.scheduled_date, service_type: sched.service_type, status: sched.status, cost: sched.cost ?? "", notes: sched.notes ?? "" });
+    setScheduleModal({ signup, editing: sched });
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!scheduleModal) return;
+    if (!schedForm.scheduled_date) { showToast("Please select a date", "error"); return; }
+    setSaving(true);
     try {
-      await updateVisitStatus(visitId, status);
-      setVisits(prev => prev.map(v => v.id === visitId ? { ...v, status } : v));
-      showToast(`Visit marked ${status}`);
+      const payload = {
+        ...(scheduleModal.editing ? { id: scheduleModal.editing.id } : {}),
+        user_id: scheduleModal.signup.user_id,
+        ...schedForm,
+        cost: schedForm.cost !== "" ? parseFloat(schedForm.cost) : null,
+      };
+      const saved = await upsertSchedule(payload);
+      if (scheduleModal.editing) {
+        setAllSchedules(prev => prev.map(s => s.id === saved.id ? { ...s, ...saved } : s));
+        showToast("Schedule updated");
+      } else {
+        setAllSchedules(prev => [saved, ...prev]);
+        showToast(`Visit scheduled for ${scheduleModal.signup.first_name}`);
+      }
+      setScheduleModal(null);
+    } catch (e) { showToast("Failed: " + e.message, "error"); }
+    finally { setSaving(false); }
+  };
+
+  const handleDeleteSchedule = async (id) => {
+    if (!confirm("Delete this scheduled visit?")) return;
+    try { await deleteSchedule(id); setAllSchedules(prev => prev.filter(s => s.id !== id)); showToast("Deleted"); }
+    catch (e) { showToast("Delete failed: " + e.message, "error"); }
+  };
+
+  const handleMarkSched = async (id, status) => {
+    try {
+      const updated = await upsertSchedule({ id, status });
+      setAllSchedules(prev => prev.map(s => s.id === id ? { ...s, ...updated } : s));
+      showToast(`Marked ${status}`);
     } catch (e) { showToast("Update failed: " + e.message, "error"); }
   };
 
-  const handleDeleteVisit = async (visitId) => {
-    if (!confirm("Delete this visit?")) return;
-    try {
-      await deleteVisit(visitId);
-      setVisits(prev => prev.filter(v => v.id !== visitId));
-      showToast("Visit deleted");
-    } catch (e) { showToast("Delete failed: " + e.message, "error"); }
-  };
-
+  // ── Visit handlers ─────────────────────────────────────────────────────────
   const handleAddVisit = async () => {
-    if (!showVisitModal) return;
+    if (!visitModal) return;
     if (!visitForm.visit_date) { showToast("Please select a date", "error"); return; }
     setSaving(true);
     try {
-      const saved = await upsertVisit({ user_id: showVisitModal.user_id, ...visitForm, cost: parseFloat(visitForm.cost) || null });
+      const saved = await upsertVisit({ user_id: visitModal.user_id, ...visitForm, cost: visitForm.cost !== "" ? parseFloat(visitForm.cost) : null });
       setVisits(prev => [saved, ...prev]);
-      setShowVisitModal(null);
-      setVisitForm({ visit_date: "", service_type: "lawn", status: "scheduled", cost: "", notes: "" });
-      showToast("Visit added");
-    } catch (e) { showToast("Failed: " + e.message, "error"); } finally { setSaving(false); }
+      setVisitModal(null); setVisitForm(blankVisit);
+      showToast("Visit recorded");
+    } catch (e) { showToast("Failed: " + e.message, "error"); }
+    finally { setSaving(false); }
   };
 
+  const handleMarkVisit  = async (id, status) => {
+    try { await updateVisitStatus(id, status); setVisits(prev => prev.map(v => v.id === id ? { ...v, status } : v)); showToast(`Marked ${status}`); }
+    catch (e) { showToast("Update failed: " + e.message, "error"); }
+  };
+
+  const handleDeleteVisit = async (id) => {
+    if (!confirm("Delete this visit record?")) return;
+    try { await deleteVisit(id); setVisits(prev => prev.filter(v => v.id !== id)); showToast("Deleted"); }
+    catch (e) { showToast("Delete failed: " + e.message, "error"); }
+  };
+
+  // ── Customer edit ──────────────────────────────────────────────────────────
   const handleUpdateSignup = async () => {
     if (!editSignup) return;
     setSaving(true);
     try {
-      const updated = await updateSignup(editSignup.id, { next_visit: editSignup.next_visit, notes: editSignup.notes, services: editSignup.services, billing: editSignup.billing });
+      const updated = await updateSignup(editSignup.id, { notes: editSignup.notes, services: editSignup.services, billing: editSignup.billing });
       setSignups(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s));
-      setEditSignup(null);
-      showToast("Customer updated");
-    } catch (e) { showToast("Update failed: " + e.message, "error"); } finally { setSaving(false); }
+      setEditSignup(null); showToast("Customer updated");
+    } catch (e) { showToast("Update failed: " + e.message, "error"); }
+    finally { setSaving(false); }
   };
 
-  // Stats
   const totalRev = signups.reduce((a, s) => {
     const lot = getLot(s.lot);
-    if (s.billing === "monthly") {
-      if (s.services?.includes("lawn")) a += lot.priceMonth ?? 0;
-      if (s.services?.includes("flowers")) a += 90;
-    }
+    if (s.billing === "monthly") { if (s.services?.includes("lawn")) a += lot.priceMonth ?? 0; if (s.services?.includes("flowers")) a += 90; }
     return a;
   }, 0);
-  const flowerCount = signups.filter(s => s.services?.includes("flowers")).length;
-  const pendingVisits = visits.filter(v => v.status === "scheduled").length;
 
   const adminTabs = [
     { key: "customers", label: `Customers (${signups.length})` },
-    { key: "visits",    label: `Visits (${visits.length})` },
+    { key: "schedules", label: `Schedules (${allSchedules.length})` },
+    { key: "visits",    label: `Visit Log (${visits.length})` },
     { key: "messages",  label: `Messages (${messages.length})` },
   ];
 
@@ -885,15 +967,13 @@ function AdminPage({ user, showToast }) {
         <button className="btn btn-ghost" style={{ color: "rgba(245,240,230,0.7)", borderColor: "rgba(245,240,230,0.2)", fontSize: 10 }} onClick={load}>↻ Refresh</button>
       </div>
 
-      {/* Stats */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, padding: "20px 24px 0" }}>
-        <StatBox label="Total Customers" value={signups.length} />
-        <StatBox label="Est. Monthly Rev." value={`$${totalRev}`} note="monthly plan subscribers" />
-        <StatBox label="Flower Subscribers" value={flowerCount} />
-        <StatBox label="Pending Visits" value={pendingVisits} note="scheduled but not done" />
+        <StatBox label="Customers"        value={signups.length} />
+        <StatBox label="Est. Monthly Rev." value={`$${totalRev}`} note="monthly subscribers" />
+        <StatBox label="Pending Visits"   value={allSchedules.filter(s => s.status === "scheduled").length} note="scheduled, not done" />
+        <StatBox label="Flower Subs"      value={signups.filter(s => s.services?.includes("flowers")).length} />
       </div>
 
-      {/* Sub-tabs */}
       <div style={{ padding: "0 24px" }}>
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginTop: 24 }}>
           {adminTabs.map(t => (
@@ -907,45 +987,31 @@ function AdminPage({ user, showToast }) {
 
       <div style={{ padding: "20px 24px 60px" }}>
 
-        {/* ── Customers tab ── */}
+        {/* Customers */}
         {activeTab === "customers" && (
           <div style={{ overflowX: "auto" }}>
             {signups.length === 0 ? (
-              <Parchment style={{ textAlign: "center", padding: 32 }}>
-                <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No customers yet. Share your signup link!</p>
-              </Parchment>
+              <Parchment style={{ textAlign: "center", padding: 32 }}><p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No customers yet.</p></Parchment>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--card-bg)", border: "1px solid var(--border)" }}>
-                <thead><tr>
-                  {["Customer","Address","Lot","Services","Billing","Payment","Next Visit","Actions"].map(h => (
-                    <th key={h} style={{ background: "var(--parchment)", fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--moss)", padding: "10px 14px", textAlign: "left", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr></thead>
+              <table style={{ width: "100%", background: "var(--card-bg)", border: "1px solid var(--border)" }} className="admin-table">
+                <thead><tr>{["Customer","Address","Lot","Services","Billing","Payment","Actions"].map(h => <th key={h}>{h}</th>)}</tr></thead>
                 <tbody>
                   {signups.map(s => (
-                    <tr key={s.id} style={{ transition: "background 0.15s" }} onMouseEnter={e => e.currentTarget.style.background = "rgba(74,103,65,0.04)"} onMouseLeave={e => e.currentTarget.style.background = ""}>
-                      <td style={{ padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
+                    <tr key={s.id}>
+                      <td>
                         <div style={{ fontWeight: 700, fontFamily: "'Playfair Display',serif", fontSize: 15 }}>{s.first_name} {s.last_name}</div>
-                        <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)" }}>{s.profiles?.full_name ?? ""}</div>
+                        <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)" }}>{s.user_id?.slice(0,8)}…</div>
                       </td>
-                      <td style={{ padding: "12px 14px", fontSize: 13, borderBottom: "1px solid rgba(0,0,0,0.05)", color: "var(--stone)" }}>{s.address}</td>
-                      <td style={{ padding: "12px 14px", fontSize: 12, borderBottom: "1px solid rgba(0,0,0,0.05)", fontFamily: "'Courier Prime',monospace", color: "var(--stone)" }}>{getLot(s.lot).label}</td>
-                      <td style={{ padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                          {(s.services ?? []).map(sv => <span key={sv} className="tag" style={{ fontSize: 9 }}>{sv}</span>)}
-                        </div>
-                      </td>
-                      <td style={{ padding: "12px 14px", fontSize: 12, borderBottom: "1px solid rgba(0,0,0,0.05)", fontFamily: "'Courier Prime',monospace", color: "var(--stone)", textTransform: "capitalize" }}>{s.billing}</td>
-                      <td style={{ padding: "12px 14px", fontSize: 12, borderBottom: "1px solid rgba(0,0,0,0.05)", fontFamily: "'Courier Prime',monospace", color: "var(--stone)" }}>
-                        {PAYMENT_OPTIONS.find(p => p.value === s.payment_method)?.label ?? "—"}
-                      </td>
-                      <td style={{ padding: "12px 14px", fontSize: 13, borderBottom: "1px solid rgba(0,0,0,0.05)", color: s.next_visit ? "var(--bark)" : "var(--stone)", fontStyle: s.next_visit ? "normal" : "italic" }}>
-                        {s.next_visit || "Not set"}
-                      </td>
-                      <td style={{ padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => setShowVisitModal(s)}>+ Visit</button>
-                          <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => setEditSignup({ ...s })}>Edit</button>
+                      <td style={{ fontSize: 13, color: "var(--stone)" }}>{s.address}</td>
+                      <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)" }}>{getLot(s.lot).label}</td>
+                      <td><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>{(s.services ?? []).map(sv => <span key={sv} className="tag" style={{ fontSize: 9 }}>{sv}</span>)}</div></td>
+                      <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)", textTransform: "capitalize" }}>{s.billing}</td>
+                      <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)" }}>{PAYMENT_OPTIONS.find(p => p.value === s.payment_method)?.label ?? "—"}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => openAddSchedule(s)}>+ Schedule</button>
+                          <button className="btn btn-ghost"   style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => { setVisitForm({ ...blankVisit, cost: getLot(s.lot).priceVisit ?? "" }); setVisitModal(s); }}>+ Visit</button>
+                          <button className="btn btn-ghost"   style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => setEditSignup({ ...s })}>Edit</button>
                         </div>
                       </td>
                     </tr>
@@ -956,47 +1022,69 @@ function AdminPage({ user, showToast }) {
           </div>
         )}
 
-        {/* ── Visits tab ── */}
+        {/* Schedules */}
+        {activeTab === "schedules" && (
+          <div style={{ overflowX: "auto" }}>
+            {allSchedules.length === 0 ? (
+              <Parchment style={{ textAlign: "center", padding: 32 }}><p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No schedules yet. Use + Schedule on a customer to add one.</p></Parchment>
+            ) : (
+              <table style={{ width: "100%", background: "var(--card-bg)", border: "1px solid var(--border)" }} className="admin-table">
+                <thead><tr>{["Date","Customer","Address","Service","Status","Cost","Notes","Actions"].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {[...allSchedules].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date)).map(s => {
+                    const sg = s.lawn_signups;
+                    return (
+                      <tr key={s.id}>
+                        <td style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, whiteSpace: "nowrap" }}>{fmtDate(s.scheduled_date)}</td>
+                        <td style={{ fontFamily: "'Playfair Display',serif", fontSize: 14 }}>{sg ? `${sg.first_name} ${sg.last_name}` : "—"}</td>
+                        <td style={{ fontSize: 13, color: "var(--stone)" }}>{sg?.address ?? "—"}</td>
+                        <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, textTransform: "uppercase", color: "var(--stone)" }}>{s.service_type}</td>
+                        <td><StatusPill status={s.status} /></td>
+                        <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 12 }}>{s.cost ? `$${parseFloat(s.cost).toFixed(2)}` : "—"}</td>
+                        <td style={{ fontSize: 13, color: "var(--stone)", maxWidth: 160 }}>{s.notes || "—"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {s.status === "scheduled" && <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkSched(s.id, "completed")}>✓ Done</button>}
+                            {s.status === "completed" && <button className="btn btn-ghost"   style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkSched(s.id, "scheduled")}>Undo</button>}
+                            <button className="btn btn-ghost"  style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => { const signup = signups.find(sg => sg.user_id === s.user_id); if (signup) openEditSchedule(s, signup); }}>Edit</button>
+                            <button className="btn btn-danger" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleDeleteSchedule(s.id)}>✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* Visit Log */}
         {activeTab === "visits" && (
           <div style={{ overflowX: "auto" }}>
             {visits.length === 0 ? (
-              <Parchment style={{ textAlign: "center", padding: 32 }}>
-                <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No visits recorded yet. Add one from the Customers tab.</p>
-              </Parchment>
+              <Parchment style={{ textAlign: "center", padding: 32 }}><p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No visits logged. Use + Visit on a customer to record one.</p></Parchment>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", background: "var(--card-bg)", border: "1px solid var(--border)" }}>
-                <thead><tr>
-                  {["Date","Customer","Service","Status","Cost","Notes","Actions"].map(h => (
-                    <th key={h} style={{ background: "var(--parchment)", fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--moss)", padding: "10px 14px", textAlign: "left", borderBottom: "1px solid var(--border)" }}>{h}</th>
-                  ))}
-                </tr></thead>
+              <table style={{ width: "100%", background: "var(--card-bg)", border: "1px solid var(--border)" }} className="admin-table">
+                <thead><tr>{["Date","Customer","Service","Status","Cost","Notes","Actions"].map(h => <th key={h}>{h}</th>)}</tr></thead>
                 <tbody>
                   {visits.map(v => {
                     const s = v.lawn_signups;
-                    const name = s ? `${s.first_name} ${s.last_name}` : "—";
                     return (
-                      <tr key={v.id} onMouseEnter={e => e.currentTarget.style.background = "rgba(74,103,65,0.04)"} onMouseLeave={e => e.currentTarget.style.background = ""}>
-                        <td style={{ padding: "11px 14px", fontSize: 14, borderBottom: "1px solid rgba(0,0,0,0.05)" }}>{v.visit_date}</td>
-                        <td style={{ padding: "11px 14px", fontSize: 14, borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 14 }}>{name}</div>
+                      <tr key={v.id}>
+                        <td style={{ whiteSpace: "nowrap" }}>{fmtDate(v.visit_date)}</td>
+                        <td>
+                          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 14 }}>{s ? `${s.first_name} ${s.last_name}` : "—"}</div>
                           {s?.address && <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)" }}>{s.address}</div>}
                         </td>
-                        <td style={{ padding: "11px 14px", fontSize: 13, borderBottom: "1px solid rgba(0,0,0,0.05)", textTransform: "capitalize" }}>{v.service_type}</td>
-                        <td style={{ padding: "11px 14px", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                          <span style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, padding: "2px 8px", textTransform: "uppercase", background: v.status === "completed" ? "rgba(74,103,65,0.15)" : "rgba(138,106,32,0.15)", color: v.status === "completed" ? "var(--moss)" : "var(--gold)" }}>
-                            {v.status}
-                          </span>
-                        </td>
-                        <td style={{ padding: "11px 14px", fontSize: 13, borderBottom: "1px solid rgba(0,0,0,0.05)", fontFamily: "'Courier Prime',monospace" }}>{v.cost ? `$${parseFloat(v.cost).toFixed(2)}` : "—"}</td>
-                        <td style={{ padding: "11px 14px", fontSize: 13, borderBottom: "1px solid rgba(0,0,0,0.05)", color: "var(--stone)" }}>{v.notes || "—"}</td>
-                        <td style={{ padding: "11px 14px", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
+                        <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, textTransform: "capitalize" }}>{v.service_type}</td>
+                        <td><StatusPill status={v.status} /></td>
+                        <td style={{ fontFamily: "'Courier Prime',monospace", fontSize: 12 }}>{v.cost ? `$${parseFloat(v.cost).toFixed(2)}` : "—"}</td>
+                        <td style={{ fontSize: 13, color: "var(--stone)" }}>{v.notes || "—"}</td>
+                        <td>
                           <div style={{ display: "flex", gap: 6 }}>
-                            {v.status !== "completed" && (
-                              <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkVisit(v.id, "completed")}>✓ Done</button>
-                            )}
-                            {v.status === "completed" && (
-                              <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkVisit(v.id, "scheduled")}>Undo</button>
-                            )}
+                            {v.status !== "completed" && <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkVisit(v.id, "completed")}>✓ Done</button>}
+                            {v.status === "completed"  && <button className="btn btn-ghost"   style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleMarkVisit(v.id, "scheduled")}>Undo</button>}
                             <button className="btn btn-danger" style={{ padding: "4px 10px", fontSize: 9 }} onClick={() => handleDeleteVisit(v.id)}>✕</button>
                           </div>
                         </td>
@@ -1009,13 +1097,11 @@ function AdminPage({ user, showToast }) {
           </div>
         )}
 
-        {/* ── Messages tab ── */}
+        {/* Messages */}
         {activeTab === "messages" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {messages.length === 0 ? (
-              <Parchment style={{ textAlign: "center", padding: 32 }}>
-                <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No messages yet.</p>
-              </Parchment>
+              <Parchment style={{ textAlign: "center", padding: 32 }}><p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic" }}>No messages yet.</p></Parchment>
             ) : messages.map(m => (
               <Card key={m.id}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
@@ -1023,9 +1109,7 @@ function AdminPage({ user, showToast }) {
                   <span className="tag tag-gold">{m.topic}</span>
                   <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", marginLeft: "auto" }}>{new Date(m.created_at).toLocaleDateString()}</div>
                 </div>
-                <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)", marginBottom: 10 }}>
-                  {m.email}{m.address ? ` · ${m.address}` : ""}
-                </div>
+                <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)", marginBottom: 10 }}>{m.email}{m.address ? ` · ${m.address}` : ""}</div>
                 <p style={{ fontSize: 15, color: "var(--bark)", lineHeight: 1.65 }}>{m.message}</p>
               </Card>
             ))}
@@ -1033,94 +1117,102 @@ function AdminPage({ user, showToast }) {
         )}
       </div>
 
-      {/* ── Add Visit Modal ── */}
-      {showVisitModal && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setShowVisitModal(null)}>
-          <div className="modal">
-            <div style={{ background: "var(--header-bg)", color: "var(--cream)", padding: "18px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", opacity: 0.5, marginBottom: 2 }}>Add Visit</div>
-                <h3 style={{ color: "var(--cream)", fontSize: 20 }}>{showVisitModal.first_name} {showVisitModal.last_name}</h3>
-              </div>
-              <button onClick={() => setShowVisitModal(null)} style={{ background: "transparent", border: "none", color: "var(--cream)", fontSize: 24, cursor: "pointer", opacity: 0.7 }}>×</button>
-            </div>
-            <div style={{ padding: 24 }}>
-              <FieldRow>
-                <Field label="Visit Date"><input type="date" value={visitForm.visit_date} onChange={e => setVisitForm(p => ({ ...p, visit_date: e.target.value }))} /></Field>
-                <Field label="Service Type">
-                  <select value={visitForm.service_type} onChange={e => setVisitForm(p => ({ ...p, service_type: e.target.value }))}>
-                    <option value="lawn">Lawn</option>
-                    <option value="flowers">Flowers</option>
-                    <option value="both">Both</option>
-                  </select>
-                </Field>
-              </FieldRow>
-              <FieldRow>
-                <Field label="Status">
-                  <select value={visitForm.status} onChange={e => setVisitForm(p => ({ ...p, status: e.target.value }))}>
-                    <option value="scheduled">Scheduled</option>
-                    <option value="completed">Completed</option>
-                  </select>
-                </Field>
-                <Field label="Cost ($)"><input type="number" value={visitForm.cost} onChange={e => setVisitForm(p => ({ ...p, cost: e.target.value }))} placeholder={getLot(showVisitModal.lot).priceVisit ?? ""} /></Field>
-              </FieldRow>
-              <Field label="Notes (optional)"><textarea value={visitForm.notes} onChange={e => setVisitForm(p => ({ ...p, notes: e.target.value }))} style={{ minHeight: 60 }} placeholder="Any notes about this visit…" /></Field>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-                <button className="btn btn-ghost" onClick={() => setShowVisitModal(null)}>Cancel</button>
-                <button className="btn btn-primary" onClick={handleAddVisit} disabled={saving}>
-                  {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : "Add Visit"}
-                </button>
-              </div>
-            </div>
+      {/* Schedule Modal */}
+      {scheduleModal && (
+        <Modal title={scheduleModal.editing ? "Edit Schedule" : "Schedule a Visit"} subtitle={`${scheduleModal.signup.first_name} ${scheduleModal.signup.last_name} · ${scheduleModal.signup.address}`} onClose={() => setScheduleModal(null)}>
+          <FieldRow>
+            <Field label="Visit Date"><input type="date" value={schedForm.scheduled_date} onChange={e => setSchedForm(p => ({ ...p, scheduled_date: e.target.value }))} /></Field>
+            <Field label="Service Type">
+              <select value={schedForm.service_type} onChange={e => setSchedForm(p => ({ ...p, service_type: e.target.value }))}>
+                <option value="lawn">Lawn</option><option value="flowers">Flowers</option><option value="both">Both</option>
+              </select>
+            </Field>
+          </FieldRow>
+          <FieldRow>
+            <Field label="Status">
+              <select value={schedForm.status} onChange={e => setSchedForm(p => ({ ...p, status: e.target.value }))}>
+                <option value="scheduled">Scheduled</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+              </select>
+            </Field>
+            <Field label="Cost ($)">
+              <input type="number" value={schedForm.cost} onChange={e => setSchedForm(p => ({ ...p, cost: e.target.value }))} placeholder={getLot(scheduleModal.signup.lot).priceVisit ?? "0"} />
+            </Field>
+          </FieldRow>
+          <Field label="Notes (optional)">
+            <textarea value={schedForm.notes} onChange={e => setSchedForm(p => ({ ...p, notes: e.target.value }))} style={{ minHeight: 60 }} placeholder="Anything to note for this visit…" />
+          </Field>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button className="btn btn-ghost" onClick={() => setScheduleModal(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleSaveSchedule} disabled={saving}>
+              {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : scheduleModal.editing ? "Save Changes" : "Add to Schedule"}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
-      {/* ── Edit Customer Modal ── */}
-      {editSignup && (
-        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setEditSignup(null)}>
-          <div className="modal">
-            <div style={{ background: "var(--header-bg)", color: "var(--cream)", padding: "18px 24px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", opacity: 0.5, marginBottom: 2 }}>Edit Customer</div>
-                <h3 style={{ color: "var(--cream)", fontSize: 20 }}>{editSignup.first_name} {editSignup.last_name}</h3>
-              </div>
-              <button onClick={() => setEditSignup(null)} style={{ background: "transparent", border: "none", color: "var(--cream)", fontSize: 24, cursor: "pointer", opacity: 0.7 }}>×</button>
-            </div>
-            <div style={{ padding: 24 }}>
-              <Field label="Next Visit Date / Note">
-                <input value={editSignup.next_visit ?? ""} onChange={e => setEditSignup(p => ({ ...p, next_visit: e.target.value }))} placeholder="e.g. May 2" />
-              </Field>
-              <Field label="Services">
-                <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                  {["lawn","flowers"].map(sv => (
-                    <label key={sv} style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "'EB Garamond',serif", fontSize: 15, textTransform: "none", letterSpacing: 0, color: "var(--bark)", cursor: "pointer" }}>
-                      <input type="checkbox" checked={(editSignup.services ?? []).includes(sv)}
-                        onChange={e => setEditSignup(p => ({ ...p, services: e.target.checked ? [...(p.services ?? []), sv] : (p.services ?? []).filter(s => s !== sv) }))}
-                        style={{ width: "auto", marginRight: 4 }} />
-                      {sv.charAt(0).toUpperCase() + sv.slice(1)}
-                    </label>
-                  ))}
-                </div>
-              </Field>
-              <Field label="Billing">
-                <select value={editSignup.billing ?? "monthly"} onChange={e => setEditSignup(p => ({ ...p, billing: e.target.value }))}>
-                  <option value="monthly">Monthly</option>
-                  <option value="per-visit">Per visit</option>
-                </select>
-              </Field>
-              <Field label="Internal Notes">
-                <textarea value={editSignup.notes ?? ""} onChange={e => setEditSignup(p => ({ ...p, notes: e.target.value }))} style={{ minHeight: 60 }} placeholder="Gate code, dog in yard, etc." />
-              </Field>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-                <button className="btn btn-ghost" onClick={() => setEditSignup(null)}>Cancel</button>
-                <button className="btn btn-primary" onClick={handleUpdateSignup} disabled={saving}>
-                  {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : "Save Changes"}
-                </button>
-              </div>
-            </div>
+      {/* Visit Modal */}
+      {visitModal && (
+        <Modal title="Log a Visit" subtitle={`${visitModal.first_name} ${visitModal.last_name} · ${visitModal.address}`} onClose={() => setVisitModal(null)}>
+          <FieldRow>
+            <Field label="Visit Date"><input type="date" value={visitForm.visit_date} onChange={e => setVisitForm(p => ({ ...p, visit_date: e.target.value }))} /></Field>
+            <Field label="Service Type">
+              <select value={visitForm.service_type} onChange={e => setVisitForm(p => ({ ...p, service_type: e.target.value }))}>
+                <option value="lawn">Lawn</option><option value="flowers">Flowers</option><option value="both">Both</option>
+              </select>
+            </Field>
+          </FieldRow>
+          <FieldRow>
+            <Field label="Status">
+              <select value={visitForm.status} onChange={e => setVisitForm(p => ({ ...p, status: e.target.value }))}>
+                <option value="completed">Completed</option><option value="scheduled">Scheduled</option>
+              </select>
+            </Field>
+            <Field label="Cost ($)">
+              <input type="number" value={visitForm.cost} onChange={e => setVisitForm(p => ({ ...p, cost: e.target.value }))} placeholder={getLot(visitModal.lot).priceVisit ?? "0"} />
+            </Field>
+          </FieldRow>
+          <Field label="Notes (optional)">
+            <textarea value={visitForm.notes} onChange={e => setVisitForm(p => ({ ...p, notes: e.target.value }))} style={{ minHeight: 60 }} placeholder="Any notes about this visit…" />
+          </Field>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button className="btn btn-ghost" onClick={() => setVisitModal(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleAddVisit} disabled={saving}>
+              {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : "Log Visit"}
+            </button>
           </div>
-        </div>
+        </Modal>
+      )}
+
+      {/* Edit Customer Modal */}
+      {editSignup && (
+        <Modal title={`${editSignup.first_name} ${editSignup.last_name}`} subtitle="Edit Customer" onClose={() => setEditSignup(null)}>
+          <Field label="Services">
+            <div style={{ display: "flex", gap: 16, marginTop: 4 }}>
+              {["lawn","flowers"].map(sv => (
+                <label key={sv} style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "'EB Garamond',serif", fontSize: 15, textTransform: "none", letterSpacing: 0, color: "var(--bark)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={(editSignup.services ?? []).includes(sv)}
+                    onChange={e => setEditSignup(p => ({ ...p, services: e.target.checked ? [...(p.services ?? []), sv] : (p.services ?? []).filter(s => s !== sv) }))}
+                    style={{ width: "auto" }} />
+                  {sv.charAt(0).toUpperCase() + sv.slice(1)}
+                </label>
+              ))}
+            </div>
+          </Field>
+          <Field label="Billing">
+            <select value={editSignup.billing ?? "monthly"} onChange={e => setEditSignup(p => ({ ...p, billing: e.target.value }))}>
+              <option value="monthly">Monthly</option><option value="per-visit">Per visit</option>
+            </select>
+          </Field>
+          <Field label="Internal Notes">
+            <textarea value={editSignup.notes ?? ""} onChange={e => setEditSignup(p => ({ ...p, notes: e.target.value }))} style={{ minHeight: 60 }} placeholder="Gate code, dog in yard, etc." />
+          </Field>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button className="btn btn-ghost" onClick={() => setEditSignup(null)}>Cancel</button>
+            <button className="btn btn-primary" onClick={handleUpdateSignup} disabled={saving}>
+              {saving ? <><span className="spinner" style={{ width: 13, height: 13 }} /> Saving…</> : "Save Changes"}
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -1136,45 +1228,27 @@ const TABS = [
 ];
 
 export default function LawnPage({ user, profile, onSignOut, onProfileUpdate }) {
-  const [tab, setTab]           = useState("home");
-  const [showAuth, setShowAuth] = useState(false);
-  const [toast, setToast]       = useState(null);
-  const [signupKey, setSignupKey] = useState(0); // force account refresh after signup
+  const [tab, setTab]             = useState("home");
+  const [showAuth, setShowAuth]   = useState(false);
+  const [toast, setToast]         = useState(null);
+  const [signupKey, setSignupKey] = useState(0);
 
   const showToast = useCallback((msg, type = "success") => setToast({ msg, type }), []);
-  const isAdmin = profile?.role === "admin";
-
-  const navTabs = isAdmin ? [...TABS, { key: "admin", label: "⚙ Admin" }] : TABS;
+  const isAdmin   = profile?.role === "admin";
+  const navTabs   = isAdmin ? [...TABS, { key: "admin", label: "⚙ Admin" }] : TABS;
 
   return (
     <>
       <GlobalStyle />
-
-      {/* Header */}
       <header style={{ background: "var(--header-bg)", color: "var(--cream)", padding: "28px 24px 18px", textAlign: "center", borderBottom: "5px double rgba(74,103,65,0.5)" }}>
-        <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.3em", textTransform: "uppercase", opacity: 0.5, marginBottom: 8 }}>
-          Est. 2024 · Lawn Care & Botanical Services
-        </div>
-        <h1 onClick={() => setTab("home")} style={{ fontSize: "clamp(32px,7vw,60px)", fontWeight: 900, letterSpacing: "-0.02em", lineHeight: 1, marginBottom: 4, cursor: "pointer", color: "var(--cream)" }}>
-          HoneyDew
-        </h1>
-        <p style={{ fontFamily: "'EB Garamond',serif", fontSize: 16, fontStyle: "italic", opacity: 0.65 }}>
-          Lawn Services & The Glasshouse · A Botanical Record of the Neighborhood
-        </p>
+        <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.3em", textTransform: "uppercase", opacity: 0.5, marginBottom: 8 }}>Est. 2024 · Lawn Care & Botanical Services</div>
+        <h1 onClick={() => setTab("home")} style={{ fontSize: "clamp(32px,7vw,60px)", fontWeight: 900, letterSpacing: "-0.02em", lineHeight: 1, marginBottom: 4, cursor: "pointer", color: "var(--cream)" }}>HoneyDew</h1>
+        <p style={{ fontFamily: "'EB Garamond',serif", fontSize: 16, fontStyle: "italic", opacity: 0.65 }}>Lawn Services & The Glasshouse · A Botanical Record of the Neighborhood</p>
       </header>
-
-      {/* Nav */}
       <nav style={{ background: "var(--nav-bg)", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 16px", borderBottom: "3px solid var(--moss)", flexWrap: "wrap", gap: 4 }}>
         <div style={{ display: "flex", flexWrap: "wrap" }}>
           {navTabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
-              background: tab === t.key ? "var(--moss)" : "transparent",
-              color: tab === t.key ? "var(--cream)" : "rgba(245,240,230,0.7)",
-              border: "none", borderBottom: `2px solid ${tab === t.key ? "var(--moss-light)" : "transparent"}`,
-              padding: "11px 14px", cursor: "pointer",
-              fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em",
-              textTransform: "uppercase", transition: "all 0.2s", whiteSpace: "nowrap",
-            }}>{t.label}</button>
+            <button key={t.key} onClick={() => setTab(t.key)} style={{ background: tab === t.key ? "var(--moss)" : "transparent", color: tab === t.key ? "var(--cream)" : "rgba(245,240,230,0.7)", border: "none", borderBottom: `2px solid ${tab === t.key ? "var(--moss-light)" : "transparent"}`, padding: "11px 14px", cursor: "pointer", fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", transition: "all 0.2s", whiteSpace: "nowrap" }}>{t.label}</button>
           ))}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0" }}>
@@ -1194,8 +1268,6 @@ export default function LawnPage({ user, profile, onSignOut, onProfileUpdate }) 
           )}
         </div>
       </nav>
-
-      {/* Pages */}
       <div key={tab}>
         {tab === "home"     && <HomePage onNav={setTab} />}
         {tab === "signup"   && <SignupPage user={user} onNav={setTab} onSignupComplete={() => setSignupKey(k => k + 1)} showToast={showToast} />}
@@ -1204,7 +1276,6 @@ export default function LawnPage({ user, profile, onSignOut, onProfileUpdate }) 
         {tab === "contact"  && <ContactPage user={user} showToast={showToast} />}
         {tab === "admin"    && isAdmin && <AdminPage user={user} showToast={showToast} />}
       </div>
-
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
       {toast && <Toast key={Date.now()} message={toast.msg} type={toast.type} onDone={() => setToast(null)} />}
     </>
