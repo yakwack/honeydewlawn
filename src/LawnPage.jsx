@@ -26,7 +26,7 @@ const PAYMENT_OPTIONS = [
 
 const SERVICE_OPTIONS = [
   { id: "lawn",    name: "Full Lawn Service", priceNote: "Pricing by lot size",  desc: "Mow, edge, trim & clean" },
-  { id: "flowers", name: "Monthly Flowers",   priceNote: "$90/mo · $25 add-on", desc: "Fresh seasonal flowers brought in & planted monthly" },
+  { id: "flowers", name: "Bucket O' Flowers",   priceNote: "$25/mo · add-on", desc: "Fresh seasonal flowers brought in & updated monthly" },
 ];
 
 const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -220,7 +220,7 @@ function Modal({ title, subtitle, onClose, children }) {
 }
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
-function AuthModal({ onClose }) {
+function AuthModal({ onClose, redirectTo = "?page=account" }) {
   const [email, setEmail]     = useState("");
   const [sent, setSent]       = useState(false);
   const [loading, setLoading] = useState(false);
@@ -230,7 +230,7 @@ function AuthModal({ onClose }) {
     setErr("");
     if (!email || !email.includes("@")) { setErr("Please enter a valid email."); return; }
     setLoading(true);
-    try { await signInWithEmail(email); setSent(true); }
+    try { await signInWithEmail(email, redirectTo); setSent(true); }
     catch (e) { setErr(e.message); }
     finally { setLoading(false); }
   };
@@ -333,10 +333,10 @@ function HomePage({ onNav }) {
           </Card>
           <Card>
             <span className="tag tag-gold" style={{ marginBottom: 12, display: "inline-block" }}>Add-On</span>
-            <h3 style={{ fontSize: 20, marginBottom: 4 }}>Monthly Flowers</h3>
-            <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--moss)", letterSpacing: "0.05em", marginBottom: 10 }}>$90 / month · $25 per visit add-on</div>
+            <h3 style={{ fontSize: 20, marginBottom: 4 }}>Bucket O' Flowers</h3>
+            <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--moss)", letterSpacing: "0.05em", marginBottom: 10 }}>$25 / month · add-on</div>
             <p style={{ fontSize: 15, color: "var(--stone)", lineHeight: 1.6, marginBottom: 14 }}>
-              We source and bring in fresh seasonal flowers each month — planted, arranged, and refreshed in your beds so there's always something in bloom.
+              We source and bring in fresh seasonal flowers and greenery each month — planted, arranged, and refreshed every month so there's always something new in bloom.
             </p>
             <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 5 }}>
               {["Hand-selected seasonal varieties","Delivered & planted by us each month","Bed prep, soil & mulch touch-up","Removed & replaced as seasons turn"].map(f => (
@@ -370,6 +370,23 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
 
   useEffect(() => {
     if (!user) return;
+    // Auto-submit form data saved before magic-link sign-in
+    const saved = sessionStorage.getItem('honeydew_pending_signup');
+    if (saved) {
+      try {
+        const { form: f, services: svcs } = JSON.parse(saved);
+        sessionStorage.removeItem('honeydew_pending_signup');
+        setForm(f);
+        setServices(svcs);
+        setSaving(true);
+        const svcList = Object.entries(svcs).filter(([, v]) => v).map(([k]) => k);
+        saveLawnSignup({ user_id: user.id, ...f, services: svcList })
+          .then(() => { setSuccess(true); onSignupComplete?.(); showToast("You're signed up for HoneyDew! 🌿"); })
+          .catch(e => setErr("Save failed: " + e.message))
+          .finally(() => setSaving(false));
+        return;
+      } catch {}
+    }
     fetchLawnSignup(user.id).then(s => {
       if (!s) return;
       setForm({ first_name: s.first_name ?? "", last_name: s.last_name ?? "", address: s.address ?? "", lot: s.lot ?? "small", billing: s.billing ?? "monthly", preferred_day: s.preferred_day ?? "", notes: s.notes ?? "", payment_method: s.payment_method ?? "venmo" });
@@ -386,7 +403,11 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
     if (!form.first_name || !form.last_name) return setErr("Please enter your full name.");
     if (!form.address) return setErr("Please enter your address.");
     if (!services.lawn && !services.flowers) return setErr("Please select at least one service.");
-    if (!user) { setShowAuth(true); return; }
+    if (!user) {
+      sessionStorage.setItem('honeydew_pending_signup', JSON.stringify({ form, services }));
+      setShowAuth(true);
+      return;
+    }
     setSaving(true);
     try {
       const svcList = Object.entries(services).filter(([, v]) => v).map(([k]) => k);
@@ -402,7 +423,7 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
     <div style={{ maxWidth: 600, margin: "0 auto", padding: "60px 24px" }} className="fade-in">
       <Card style={{ textAlign: "center", padding: 40 }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🌿</div>
-        <h2 style={{ fontSize: 28, marginBottom: 10 }}>Welcome to HoneyDew.</h2>
+        <h2 style={{ fontSize: 28, marginBottom: 10, color: "var(--bark)" }}>Welcome to HoneyDew.</h2>
         <p style={{ fontSize: 17, color: "var(--stone)", lineHeight: 1.7, maxWidth: 380, margin: "0 auto 24px" }}>You're all set. We'll be in touch to confirm your first visit.</p>
         <button className="btn btn-primary" onClick={() => onNav("account")} style={{ padding: "12px 28px" }}>Go to My Account →</button>
       </Card>
@@ -413,7 +434,7 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
     <div style={{ maxWidth: 680, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew Lawn Services</div>
-        <h2 style={{ fontSize: 32, marginBottom: 8 }}>{user ? "Update Your Signup" : "Join the Collection"}</h2>
+        <h2 style={{ fontSize: 32, marginBottom: 8, color: "var(--bark)" }}>{user ? "Update Your Signup" : "Join the Collection"}</h2>
         <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65 }}>One account for HoneyDew Lawn Services and The Glasshouse. Sign up once — access both.</p>
       </div>
       <Card>
@@ -482,7 +503,7 @@ function SignupPage({ user, onNav, onSignupComplete, showToast }) {
         </button>
         {!user && <p style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, color: "var(--stone)", textAlign: "center", marginTop: 10, letterSpacing: "0.05em" }}>You'll be prompted to sign in when you submit.</p>}
       </Card>
-      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {showAuth && <AuthModal onClose={() => setShowAuth(false)} redirectTo="?page=signup" />}
     </div>
   );
 }
@@ -519,7 +540,7 @@ function AccountPage({ user, onNav, showToast }) {
   if (!user) return (
     <div style={{ maxWidth: 520, margin: "0 auto", padding: "60px 24px", textAlign: "center" }} className="fade-in">
       <div style={{ fontSize: 48, marginBottom: 16 }}>🌿</div>
-      <h2 style={{ fontSize: 28, marginBottom: 10 }}>Your HoneyDew Account</h2>
+      <h2 style={{ fontSize: 28, marginBottom: 10, color: "var(--bark)" }}>Your HoneyDew Account</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", maxWidth: 360, margin: "0 auto 24px", lineHeight: 1.7 }}>
         Sign in to manage your lawn services, track visits, and view your schedule.
       </p>
@@ -534,7 +555,7 @@ function AccountPage({ user, onNav, showToast }) {
   if (!signup) return (
     <div style={{ maxWidth: 520, margin: "0 auto", padding: "60px 24px", textAlign: "center" }} className="fade-in">
       <div style={{ fontSize: 40, marginBottom: 16 }}>📋</div>
-      <h2 style={{ fontSize: 24, marginBottom: 10 }}>No signup yet</h2>
+      <h2 style={{ fontSize: 24, marginBottom: 10, color: "var(--bark)" }}>No signup yet</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", marginBottom: 20, lineHeight: 1.7 }}>You're signed in but haven't signed up for lawn service yet.</p>
       <button className="btn btn-primary" onClick={() => onNav("signup")} style={{ padding: "12px 28px" }}>Sign Up for Service →</button>
     </div>
@@ -561,7 +582,7 @@ function AccountPage({ user, onNav, showToast }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 4 }}>HoneyDew Account</div>
-          <h2 style={{ fontSize: 30, marginBottom: 3 }}>Hello, {signup.first_name}.</h2>
+          <h2 style={{ fontSize: 30, marginBottom: 3, color: "var(--bark)" }}>Hello, {signup.first_name}.</h2>
           <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 11, color: "var(--stone)", letterSpacing: "0.05em" }}>{signup.address} · {user.email}</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -575,6 +596,17 @@ function AccountPage({ user, onNav, showToast }) {
         <StatBox label="This Month"    value={`$${monthTotal.toFixed(0)}`} note={`${visits.length} total visit${visits.length !== 1 ? "s" : ""}`} />
         <StatBox label="Next Visit"    value={nextVisit ? fmtDate(nextVisit.scheduled_date) : "TBD"} note={nextVisit ? nextVisit.service_type : "We'll be in touch"} />
       </div>
+
+      {/* Pending first visit banner */}
+      {upcoming.length === 0 && (
+        <Parchment style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 8, borderLeft: "3px solid var(--gold)" }}>
+          <div style={{ fontSize: 22 }}>📋</div>
+          <div>
+            <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.15em", textTransform: "uppercase", color: "var(--gold)", marginBottom: 4 }}>First Visit Pending</div>
+            <p style={{ fontSize: 15, color: "var(--stone)", lineHeight: 1.65 }}>You're all signed up — we'll reach out soon to confirm your first visit.</p>
+          </div>
+        </Parchment>
+      )}
 
       {/* Upcoming schedule */}
       {upcoming.length > 0 && (
@@ -602,7 +634,7 @@ function AccountPage({ user, onNav, showToast }) {
       <div style={{ marginBottom: 24 }}>
         {[
           { id: "lawn",    name: "Full Lawn Service", price: () => signup.billing === "monthly" ? `$${lot.priceMonth}/mo` : `$${lot.priceVisit}/visit` },
-          { id: "flowers", name: "Monthly Flowers",   price: () => signup.billing === "monthly" ? "$90/mo" : "$25/visit add-on" },
+          { id: "flowers", name: "Bucket O' Flowers",   price: () => signup.billing === "monthly" ? "$20/mo" : "Maintained at visits" },
         ].map(s => {
           const active = signup.services?.includes(s.id);
           return (
@@ -677,7 +709,7 @@ function SchedulePage({ user, showToast }) {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
       <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew</div>
-      <h2 style={{ fontSize: 30, marginBottom: 8 }}>Your Schedule</h2>
+      <h2 style={{ fontSize: 30, marginBottom: 8, color: "var(--bark)" }}>Your Schedule</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 28 }}>
         Your upcoming and past lawn care visits. Need to move something? Use the form below.
       </p>
@@ -787,7 +819,7 @@ function ContactPage({ user, showToast }) {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px 60px" }} className="fade-in">
       <div style={{ fontFamily: "'Courier Prime',monospace", fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--moss)", marginBottom: 6 }}>HoneyDew</div>
-      <h2 style={{ fontSize: 30, marginBottom: 8 }}>Get in Touch</h2>
+      <h2 style={{ fontSize: 30, marginBottom: 8, color: "var(--bark)" }}>Get in Touch</h2>
       <p style={{ fontSize: 16, color: "var(--stone)", fontStyle: "italic", lineHeight: 1.65, marginBottom: 28 }}>Questions about services, pricing, or your yard? We're right in the neighborhood.</p>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, alignItems: "start" }}>
         <div>
@@ -944,7 +976,7 @@ function AdminPage({ user, showToast }) {
 
   const totalRev = signups.reduce((a, s) => {
     const lot = getLot(s.lot);
-    if (s.billing === "monthly") { if (s.services?.includes("lawn")) a += lot.priceMonth ?? 0; if (s.services?.includes("flowers")) a += 90; }
+    if (s.billing === "monthly") { if (s.services?.includes("lawn")) a += lot.priceMonth ?? 0; if (s.services?.includes("flowers")) a += 25; }
     return a;
   }, 0);
 
@@ -1235,6 +1267,16 @@ export default function LawnPage({ user, profile, onSignOut, onProfileUpdate }) 
 
   const showToast = useCallback((msg, type = "success") => setToast({ msg, type }), []);
   const isAdmin   = profile?.role === "admin";
+
+  const [pendingPage] = useState(() => new URLSearchParams(window.location.search).get('page'));
+  useEffect(() => {
+    if (!user || !pendingPage) return;
+    const valid = ["home", "signup", "account", "schedule", "contact"];
+    if (valid.includes(pendingPage)) {
+      setTab(pendingPage);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, [user, pendingPage]);
   const navTabs   = isAdmin ? [...TABS, { key: "admin", label: "⚙ Admin" }] : TABS;
 
   return (

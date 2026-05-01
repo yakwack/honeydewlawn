@@ -17,10 +17,10 @@ export function onAuthStateChange(cb) {
   });
 }
 
-export async function signInWithEmail(email) {
+export async function signInWithEmail(email, redirectPath = "") {
   const { error } = await supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: window.location.origin },
+    options: { emailRedirectTo: window.location.origin + redirectPath },
   });
   if (error) throw error;
 }
